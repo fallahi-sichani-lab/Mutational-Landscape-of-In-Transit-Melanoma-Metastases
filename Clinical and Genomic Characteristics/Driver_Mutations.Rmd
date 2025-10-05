@@ -1,0 +1,70 @@
+---
+title: "Clinical and genomic characteristics of the melanoma patient cohort in MSK-IMPACT"
+output: "Figure 2B"
+---
+
+```{r}
+rm(list=ls()) #clear all
+cat("\014") #clc
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+```{r}
+# Define Input directory 
+inDir <- "../Data/"
+```
+
+```{r}
+data <- read.csv(file.path(inDir,"driver_mutations_melanoma_samples.csv"))
+```
+
+```{r}
+df <- data[1:nrow(data)-1,]
+
+# Set desired order for Driver.Class
+driver_order <- c("V600E BRAF", "Non-V600 Class I BRAF", "Class II/III BRAF",
+                  "NRAS Q61", "NF1", "KIT/PDGFRA", "Other")
+
+# Convert to factor with specified levels
+df$Driver.Class <- factor(df$Driver.Class, levels = driver_order)
+
+df_pct <- df %>%
+  # for every numeric column, divide by its column‐sum and multiply by 100
+  mutate(across(where(is.numeric),
+                ~ . / sum(.) * 100 ))
+
+# Pivot longer
+df_long <- df_pct %>%
+  pivot_longer(
+    cols = -Driver.Class,
+    names_to = "TumorType",
+    values_to = "Percent"
+  ) %>%
+  mutate(TumorType = str_replace(TumorType, "^In\\.Transit$", "In-Transit")) %>%
+  mutate(TumorType = str_replace(TumorType, "^Regional\\.LN$", "Regional LN")) 
+
+pdf("driver_class_by_sample_type.pdf", width = 10, height = 6)
+ggplot(df_long, aes(x = Driver.Class, y = Percent, fill = TumorType)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(expand = c(0, 0)) +
+  labs(x = "Driver Mutation Class", y = "% within Sample Type", fill = "Sample Type") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+
+pdf("driver_class_distribution.pdf", width = 7, height = 6)
+ggplot(df_long, aes(x = TumorType, y = Percent, fill = Driver.Class)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(round(Percent, 1), "%")), 
+            position = position_stack(vjust = 0.5), size = 4) +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(expand = c(0, 0)) +
+  labs(x = "Sample Type", y = "% of Samples", fill = "Driver Class") +
+  theme_classic(base_size = 14)
+dev.off()
+```

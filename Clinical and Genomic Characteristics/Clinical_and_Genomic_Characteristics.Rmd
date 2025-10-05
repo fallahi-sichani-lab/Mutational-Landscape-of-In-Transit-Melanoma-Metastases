@@ -1,0 +1,329 @@
+---
+title: "Clinical and genomic characteristics of the melanoma patient cohort in MSK-IMPACT"
+output: "Figure 2A,2C,2D"
+---
+
+
+```{r}
+rm(list=ls()) #clear all
+cat("\014") #clc
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(cowplot)  
+library(readr)
+library(ggforce)
+```
+
+```{r}
+# Define Output directory 
+outDir <- "../Results/"
+# Define Input directory 
+inDir <- "../Data/"
+```
+
+```{r}
+# Importing Mutational Status Data 
+data.intransit <- read.csv(file.path(inDir,"intransit_pts.csv"))
+data.mets <- read.csv(file.path(inDir,"mets_pts.csv"))
+data.primary<- read.csv(file.path(inDir,"primary_pts.csv"))
+data.regionalLN <- read.csv(file.path(inDir,"regionalLN_pts.csv"))
+```
+
+```{r}
+# Adding class variable 
+data.intransit$class <- as.factor("In-Transit")
+data.mets$class <- as.factor("Metastasis")
+data.primary$class <- as.factor("Primary")
+data.regionalLN$class <- as.factor("Regional Lymph Node")
+```
+
+```{r}
+# Bind all dataframes 
+data.melanoma <- rbind(rbind(rbind(data.intransit,data.mets),data.primary),data.regionalLN)
+rownames(data.melanoma) <- data.melanoma$patientId
+data.melanoma$patientId <- NULL
+```
+
+```{r}
+###############
+# Clean data #
+###############
+
+# Remove non-gene columns like 'class'
+gene_data <- data.melanoma[, !names(data.melanoma) %in% c("class")]
+
+# Identify profiled genes for each patient
+profiled_genes_per_patient <- apply(!is.na(gene_data), 1, function(x) paste(which(x), collapse = "-"))
+
+#Create a summary table
+profiled_summary <- data.frame(
+  Profile_ID = profiled_genes_per_patient
+)
+
+#Count unique profiles and their frequencies
+library(dplyr)
+profile_counts <- profiled_summary %>%
+  group_by(Profile_ID) %>%
+  summarise(
+    Num_Patients = n(),
+    Num_Genes_Profiled = length(unlist(strsplit(Profile_ID[1], "-")))
+  ) %>%
+  arrange(desc(Num_Patients))
+
+#Get actual gene names for each profile
+profile_sets <- lapply(unique(profiled_genes_per_patient), function(id) {
+  as.character(names(gene_data))[as.numeric(unlist(strsplit(id, "-")))]
+})
+names(profile_sets) <- unique(profiled_genes_per_patient)
+
+
+```
+
+```{r}
+
+#####################################################
+# Finding shared and missing genes across profiles #
+#####################################################
+
+# Get the Profile_ID for each of the three sizes
+sz2id <- setNames(profile_counts$Profile_ID, profile_counts$Num_Genes_Profiled)
+id462 <- sz2id["462"]
+id405 <- sz2id["405"]
+id340 <- sz2id["340"]
+
+# Pull out the actual gene‐name vectors
+genes462 <- profile_sets[[ id462 ]]
+genes405 <- profile_sets[[ id405 ]]
+genes340 <- profile_sets[[ id340 ]]
+
+# Compute intersections and set‐differences
+shared_405_vs_462   <- intersect(genes462, genes405)
+missing_in_405       <- setdiff(genes462, genes405)
+
+shared_340_vs_462   <- intersect(genes462, genes340)
+missing_in_340       <- setdiff(genes462, genes340)
+
+# Compare the two smaller sets directly:
+shared_340_vs_405   <- intersect(genes340, genes405)
+missing_340_from_405 <- setdiff(genes405, genes340)
+
+# Inspect sizes
+lengths <- sapply(
+  list(
+    shared_405_vs_462,
+    missing_in_405,
+    shared_340_vs_462,
+    missing_in_340,
+    shared_340_vs_405,
+    missing_340_from_405
+  ),
+  length
+)
+names(lengths) <- c(
+  "shared_405_vs_462", "missing_in_405",
+  "shared_340_vs_462", "missing_in_340",
+  "shared_340_vs_405", "missing_340_from_405"
+)
+print(lengths)
+
+# Table
+comparison_groups <- data.frame(
+  Gene       = sort(union(genes462, genes405)),
+  In_462     = sort(union(genes462, genes405)) %in% genes462,
+  In_405     = sort(union(genes462, genes405)) %in% genes405,
+  In_340    = sort(union(genes462, genes405)) %in% genes340
+)
+head(comparison_groups)
+
+```
+
+```{r}
+# Add group class for patients with different # of genes sequenced
+data.melanoma$group <- "g1"
+data.melanoma$numgenes <- 462
+
+data.melanoma[rowSums(is.na(data.melanoma)) > 0,"group"] <- "g2"
+data.melanoma[rowSums(is.na(data.melanoma)) > 0,"numgenes"] <- "405"
+
+data.melanoma[rowSums(is.na(data.melanoma)) > 100 ,"group"] <- "g3"
+data.melanoma[rowSums(is.na(data.melanoma)) > 100,"numgenes"] <- "340"
+```
+
+```{r}
+########################
+# ---- Figure 2A ---- #
+########################
+
+# Make sure 'class' is a character (not factor)
+data.melanoma$class <- as.character(data.melanoma$class)
+
+# Summarize counts & percentages
+pie_df <- data.melanoma %>%
+  count(class, name = "count") %>%
+  mutate(
+    perc = count / sum(count),
+    label_display = ifelse(
+      class == "Regional Lymph Node",
+      "Regional\nLymph Node",
+      class
+    ),
+    label = paste0(
+      label_display, "\n",
+      "n = ", count, "\n",
+      round(perc * 100, 1), "%"
+    )
+  )
+
+# Plot with Set2 palette from RColorBrewer
+p_pie <- ggplot(pie_df, aes(x = "", y = perc, fill = class)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    size = 6.5, lineheight = 1.1
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_void(base_size = 20) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 22, face = "bold", hjust = 0.5)
+  ) +
+  ggtitle(
+    "Tumor type distribution across \n528 cutaneous melanoma samples\n(MSK-IMPACT)"
+  )
+
+# Save high‐res PNG
+ggsave(
+  filename = "tumor_type_piechart_Set2.png",
+  plot     = p_pie,
+  width    = 7, height = 7,
+  dpi      = 600
+)
+
+pdf("tumor_type_piechart.pdf", width = 7, height = 7)
+print(p_pie)
+dev.off()
+
+```
+
+```{r}
+########################
+# ---- Figure 2C ---- #
+########################
+
+# ---- Prepare data ----
+plot_df <- data.melanoma %>%
+  count(class, numgenes) %>%
+  group_by(class) %>%
+  mutate(perc = 100 * n / sum(n)) %>%
+  ungroup()
+
+# Palette & labels
+gene_levels  <- factor(sort(unique(plot_df$numgenes)))
+base_col     <- brewer.pal(4, "Set2")[1]
+shades       <- colorRampPalette(c("#c5e8de", base_col))(length(gene_levels))
+legend_labels <- paste0(
+  c("Cohort I  (", "Cohort II (", "Cohort III("),
+  gene_levels, " genes)"
+)
+
+# Core plot object (with legend)
+p_core <- ggplot(plot_df, aes(x = class, y = perc, fill = numgenes)) +
+  geom_col(color = "white") +
+  geom_text(
+    aes(label = paste0("n=", n)),
+    position = position_stack(vjust = 0.5),
+    size = 5, color = "black"
+  ) +
+  scale_fill_manual(
+    name   = "Patient Cohort\n(# of genes profiled)",
+    values = shades,
+    labels = legend_labels
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    expand = expansion(add = c(0, 5))
+  ) +
+  labs(
+    x     = NULL,
+    y     = "% of Samples",
+    title = ""
+  ) +
+  theme_classic(base_size = 16) +
+  theme(
+    plot.margin     = margin(t = 15, r = 10, b = 10, l = 10),
+    axis.title      = element_text(size = 24),
+    axis.text       = element_text(size = 20),
+    axis.text.x     = element_text(angle = 45, hjust = 1)
+  )
+
+# Save main figure without legend as PDF 
+p_no_legend <- p_core + theme(legend.position = "none")
+
+pdf("stack_barplot_percent_per_category.pdf", width = 4, height = 7)
+print(p_no_legend)
+dev.off()
+
+# Save legend as its own PDF via pdf()
+legend_grob <- get_legend(
+  p_core + theme(
+    legend.position   = "right",
+    legend.background = element_rect(fill = "white", color = NA)
+  )
+)
+legend_plot <- ggdraw(legend_grob)
+
+pdf("stack_barplot_legend_only.pdf", width = 4, height = 5)
+print(legend_plot)
+dev.off()
+
+```
+
+```{r}
+
+########################
+# ---- Figure 2D ---- #
+########################
+
+shades <- colorRampPalette(c("#c5e8de", base_col))(3)
+
+# Radii (in “data units”)
+subset_df <- data.frame(
+  group  = factor(c("462 Genes", "405 Genes", "340 Genes"),
+                  levels = c("462 Genes", "405 Genes", "340 Genes")),
+  radius = c(3, 2, 1)
+)
+
+p_circles <- ggplot(subset_df) +
+  # draw each circle at (0,0) with radius
+  geom_circle(aes(x0 = 0, y0 = 0, r = radius, fill = group),
+              color = "black", show.legend = FALSE) +
+  # add the labels just inside the bottom of each circle
+  geom_text(aes(x = 0, y = -radius + 0.2, label = group),
+            size = 10, color = "black") +
+  coord_fixed() +       # preserve aspect ratio so circles aren’t ellipses
+  scale_fill_manual(values = shades[c(3,2,1)]) +
+  theme_void() +
+  ggtitle("") 
+
+
+# Save high‐res PNG
+ggsave(
+  filename = "concentric_circles_gene_relationship.png",
+  plot     = p_circles,
+  width    = 7, height = 7,
+  dpi      = 600
+)
+
+pdf("concentric_circles_gene_relationship.pdf", width = 7, height = 7)
+print(p_circles)
+dev.off()
+
+```
+
+
