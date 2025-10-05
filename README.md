@@ -4,6 +4,7 @@
 This repository contains the analysis code and data accompanying the manuscript:  
 
 **“Characterizing the Mutational Landscape of In-Transit Melanoma Metastases”**  
+Luisa Quesada Camacho #, Mohamad El Moheb #, MacKenzie Mayhew, Maria F Nunez, Margaret G Mercante, Emily G Tocco, Nidhi Kuchimanchi, Susan Kim, Kaelyn Cummins, Lynn T Dengel, Allan Tsung, Craig L Slingluff Jr, Mohammad Fallahi-Sichani, Russell G Witt [# Equal contributions]
 
 The study characterizes the mutational landscape of in-transit melanoma (ITM) using the MSK-IMPACT sequencing dataset. We integrate **clinical/genomic comparisons, mutual information (MI) analysis, pairwise gene mutation analysis, and principal component analysis (PCA)** to define mutation patterns that distinguish ITM from primary tumors, regional lymph node metastases, and distant metastases.  
 
