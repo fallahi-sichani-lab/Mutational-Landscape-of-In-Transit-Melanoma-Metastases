@@ -1,0 +1,149 @@
+---
+title: "Pairwise mutation analysis and functional enrichment of NRASMUT/WT gene combinations in ITM"
+output: "Figure 4A"
+---
+
+```{r}
+rm(list=ls()) #clear all
+cat("\014") #clc
+```
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(readr)
+library(dplyr)
+library(RColorBrewer)
+```
+
+```{r}
+inDir <- "../Data/"
+```
+
+```{r}
+#  Load the two-class dataset 
+pairwise_results <- read_csv(file.path(inDir,"20250730_mi_results_two_class.csv"), show_col_types = FALSE)
+```
+
+```{r}
+########################
+# ---- Figure 4A ---- #
+########################
+
+# Apply mutation label switch when More_Mutated is "other"
+switch_mut_label <- function(name) {
+  name <- gsub("MUT", "TEMP", name)
+  name <- gsub("WT", "MUT", name)
+  name <- gsub("TEMP", "WT", name)
+  return(name)
+}
+pairwise_results$Combination <- mapply(function(comb, group) {
+  if (!is.na(group) && tolower(group) == "other") {
+    return(switch_mut_label(comb))
+  } else {
+    return(comb)
+  }
+}, pairwise_results$Combination, pairwise_results$More_Mutated)
+
+# Rank based on MI (descending)
+pairwise_results <- pairwise_results %>%
+  arrange(desc(MI)) %>%
+  mutate(Rank = row_number())
+
+# Vectorized formatter for combo names
+format_comb_vec <- function(comb_vec) {
+  out <- as.character(comb_vec)
+  na_idx <- is.na(comb_vec)
+  out[na_idx] <- NA_character_
+  pattern <- "^([A-Za-z0-9]+)_ANDNOT_([A-Za-z0-9]+)$"
+  matches <- grepl(pattern, comb_vec)
+  g1 <- sub(pattern, "\\1", comb_vec)
+  g2 <- sub(pattern, "\\2", comb_vec)
+  out[matches] <- paste0(g1[matches], "^MUT/", g2[matches], "^WT")
+  return(out)
+}
+
+# Define special highlights
+special_singles <- c("NRAS", "NF1", "ATRX")
+special_combos <- c(
+  "NRAS_ANDNOT_PAK5",
+  "NRAS_ANDNOT_PRKN",
+  "NRAS_ANDNOT_ROS1"
+)
+
+pairwise_results <- pairwise_results %>%
+  mutate(
+    Identifier = if_else(
+      is.na(Gene2) | Gene2 == "",
+      Gene1,
+      format_comb_vec(Combination)
+    ),
+    IsSpecial = (
+      (Gene1 %in% special_singles & (is.na(Gene2) | Gene2 == "")) |
+        (Combination %in% special_combos)
+    ),
+    Label = case_when(
+      Gene1 == "NF1" & (is.na(Gene2) | Gene2 == "") ~ "NF1 WT",
+      Gene1 == "ATRX" & (is.na(Gene2) | Gene2 == "") ~ "ATRX WT",
+      Gene1 == "NCOA3" & (is.na(Gene2) | Gene2 == "") ~ "NCOA3 WT",
+      Gene1 == "TBX3" & (is.na(Gene2) | Gene2 == "") ~ "TBX3 WT",
+      Gene1 == "NRAS" & (is.na(Gene2) | Gene2 == "") ~ "NRAS MUT",
+      Gene1 == "NOTCH1" & (is.na(Gene2) | Gene2 == "") ~ "NOTCH1 MUT",
+      Combination %in% special_combos ~ format_comb_vec(Combination),
+      TRUE ~ NA_character_
+    )
+  )
+
+# Determine top MI point
+pairwise_results <- pairwise_results %>%
+  mutate(IsTopMI = Rank == 1)
+
+# Final label logic
+labels_df <- pairwise_results %>%
+  filter(IsSpecial | IsTopMI) %>%
+  mutate(
+    LabelFinal = case_when(
+      IsTopMI & !is.na(Label) ~ paste0(Label, " (top MI)"),
+      IsTopMI & is.na(Label) ~ Identifier,
+      !IsTopMI ~ Label,
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(LabelFinal))
+
+# Choose green from Set2 for special triangles 
+set2_cols <- brewer.pal(8, "Set2")
+green_fill <- set2_cols[1]  # e.g., "#66C2A5"
+
+#  Plot: Rank vs MI 
+p_rank_mi <- ggplot(pairwise_results, aes(x = Rank, y = MI)) +
+  # non-special: gray circles with lower alpha
+  geom_point(
+    data = filter(pairwise_results, !IsSpecial),
+    aes(x = Rank, y = MI),
+    shape = 21, fill = "lightgray", color = "black",
+    size = 3, stroke = 0.4, alpha = 0.3
+  ) +
+  geom_point(
+    data = filter(pairwise_results, IsSpecial),
+    aes(x = Rank, y = MI),
+    shape = 25, fill = green_fill, color = "black",
+    size = 4, stroke = 0.6
+  ) +
+  labs(
+    x = "Rank",
+    y = "Mutual Information (MI)",
+    title = ""
+  ) +
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x     = element_text(size = 25),
+    axis.text.y     = element_text(size = 25),
+    plot.title = element_text(size = 18, face = "bold"),
+    axis.title      = element_text(size = 35)
+  )
+
+pdf("two_class_ranked_MI_highlighted_nolabels.pdf", width = 8, height = 8)
+print(p_rank_mi)
+dev.off()
+```

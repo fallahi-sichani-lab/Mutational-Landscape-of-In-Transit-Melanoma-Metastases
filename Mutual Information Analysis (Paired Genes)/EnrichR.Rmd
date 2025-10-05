@@ -1,0 +1,71 @@
+---
+title: "Pairwise mutation analysis and functional enrichment of NRASMUT/WT gene combinations in ITM"
+output: "Figure 4D"
+---
+
+```{r}
+rm(list=ls()) #clear all
+cat("\014") #clc
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(stringr)
+library(forcats)
+```
+
+```{r}
+inDir <- "../Data/"
+```
+
+```{r}
+# Load and prepare data
+df <- read_csv(file.path(inDir,"MSigDB_Hallmark_2020_table_intransit_vs_other.csv"), col_types = cols()) %>%
+  mutate(
+    minusLog10AdjP = -log10(`Adjusted P-value`),
+    genes_wrapped  = str_wrap(Genes, width = 40),
+    Term           = fct_reorder(Term, minusLog10AdjP),
+    is_signif      = minusLog10AdjP >= -log10(0.01)  # TRUE if adj-p ≤ 0.01
+  )
+```
+
+```{r}
+########################
+# ---- Figure 4D ---- #
+########################
+
+# Define colors
+col_sig   <- brewer.pal(8, "Set2")[1]
+col_nonsig <- "#333333"
+
+# Plot
+p <- ggplot(df, aes(x = Term, y = minusLog10AdjP, fill = is_signif)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(
+    values = c(
+      `TRUE`  = col_sig,
+      `FALSE` = col_nonsig
+    ),
+    guide  = "none"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
+  labs(
+    title = "",
+    x     = NULL,
+    y     = expression(-log[10]("Adjusted P-value"))
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.y   = element_text(size = 22),
+    axis.text.x = element_text(size = 22),
+    axis.title=element_text(size=24),
+  ) + geom_hline(yintercept = -log10(0.01), colour=brewer.pal(8, "Set2")[2], linetype = "longdash")
+
+print(p)
+#ggsave("hallmark_intransit_vs_other_barplot_colored.pdf", p, width = 9, height = 10)
+
+```

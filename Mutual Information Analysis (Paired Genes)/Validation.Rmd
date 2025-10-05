@@ -1,0 +1,165 @@
+---
+title: "Pairwise mutation analysis and functional enrichment of NRASMUT/WT gene combinations in ITM"
+output: "Figure 4E"
+---
+
+```{r}
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(RColorBrewer)
+```
+
+```{r}
+rm(list=ls()) #clear all
+cat("\014") #clc
+```
+
+```{r}
+inDir <- "../Data/"
+```
+
+```{r}
+# Import data
+mutation_df_full <- readRDS(file.path(inDir,"mutation_df_validation.rds"))
+```
+
+```{r}
+########################
+# ---- Figure 4E ---- #
+########################
+
+# Specify the columns to keep: 'class' and example genes of interest
+genes_interest <- c("class", "NRAS", "NF1", "PAK5", "NCOA3", "PRKN", "ROS1")
+df_sub <- mutation_df_full %>% select(all_of(genes_interest))
+
+# Drop gene columns that are entirely NA
+gene_cols    <- setdiff(names(df_sub), "class")
+all_na_genes <- gene_cols[sapply(df_sub[gene_cols], function(col) all(is.na(col)))]
+if (length(all_na_genes) > 0) {
+  df_sub <- df_sub %>% select(-all_of(all_na_genes))
+}
+message("Dropped gene columns that were all NA: ",
+        ifelse(length(all_na_genes)>0, paste(all_na_genes, collapse=", "), "None"))
+
+# Drop any row that has ANY NA in the remaining columns
+df_clean <- df_sub %>% drop_na()
+message("Rows after dropping any with NA: ", nrow(df_clean))
+
+# Recode 'class' into a two‐level Category and compute category counts ----
+df_clean <- df_clean %>%
+  mutate(
+    Category = if_else(class == "intransit", "In-Transit", "Other")
+  )
+category_counts <- df_clean %>%
+  dplyr::count(Category) %>%
+  arrange(match(Category, c("In-Transit","Other")))
+legend_labels <- paste0(category_counts$Category, " (n=", category_counts$n, ")")
+
+# Define the mutation/WT profiles to plot ----
+df_clean <- df_clean %>%
+  mutate(
+    NRAS_MUT         = (NRAS == 1),
+    NF1_WT           = (NF1 == 0),
+    ROS1_WT          = (ROS1 == 0),
+    PAK5_WT          = (PAK5 == 0),
+    NCOA3_WT         = (NCOA3 == 0),
+    NRAS_ANDNOT_PAK5 = (NRAS == 1 & PAK5 == 0),
+    NRAS_ANDNOT_PRKN = (NRAS == 1 & PRKN == 0),
+    NRAS_ANDNOT_ROS1 = (NRAS == 1 & ROS1 == 0)
+  )
+
+profiles <- c(
+  "NRAS_MUT",
+  "NF1_WT",
+  "PAK5_WT",
+  "NCOA3_WT",
+  "NRAS_ANDNOT_PAK5",
+  "NRAS_ANDNOT_PRKN", 
+  "NRAS_ANDNOT_ROS1"
+)
+
+# Pivot to long & compute counts + percentage
+plot_df <- df_clean %>%
+  select(Category, all_of(profiles)) %>%
+  pivot_longer(
+    cols      = all_of(profiles),
+    names_to  = "Profile",
+    values_to = "Status"
+  ) %>%
+  group_by(Profile, Category) %>%
+  summarise(
+    n_samples  = n(),
+    n_positive = sum(Status),
+    percent    = 100 * n_positive / n_samples,
+    .groups    = "drop"
+  )
+
+# Assign each profile to a panel group: MUT, WT, or MUT/WT 
+plot_df <- plot_df %>%
+  mutate(
+    Panel = case_when(
+      grepl("_MUT$", Profile) & !grepl("ANDNOT", Profile) ~ "MUT",
+      grepl("_WT$", Profile)                                 ~ "WT",
+      grepl("ANDNOT", Profile)                               ~ "MUT/WT"
+    )
+  )
+
+# Factor ordering and labels
+plot_df$Panel <- factor(plot_df$Panel, levels = c("MUT","WT","MUT/WT"))
+readable <- c(
+  NRAS_MUT         = "NRAS MUT",
+  NF1_WT           = "NF1 WT",
+  PAK5_WT          = "PAK5 WT",
+  NCOA3_WT         = "NCOA3 WT",
+  NRAS_ANDNOT_PAK5 = "NRAS ∧ ¬PAK5",
+  NRAS_ANDNOT_PRKN = "NRAS ∧ ¬PRKN",
+  NRAS_ANDNOT_ROS1 = "NRAS ∧ ¬ROS1"
+)
+plot_df$ProfileLabel <- factor(readable[plot_df$Profile], levels = readable)
+
+# Custom colors and legend labels
+custom_colors <- setNames(
+  c(brewer.pal(8,"Set2")[1], "#333333"),
+  legend_labels
+)
+
+plot_df$CategoryLabel <- factor(
+  plot_df$Category,
+  levels = category_counts$Category,
+  labels = legend_labels
+)
+
+# Build the faceted barplot
+p_profiles <- ggplot(plot_df, aes(x = ProfileLabel, y = percent, fill = CategoryLabel)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, color = "white") +
+  scale_fill_manual(values = custom_colors, name = NULL) +
+  scale_y_continuous(
+    limits = c(0,110), expand = c(0,0),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    x     = NULL,
+    y     = "% of Samples",
+    title = ""
+  ) +
+  facet_grid(~ Panel, scales = "free_x", space = "free_x") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.y     = element_text(size = 25),
+    axis.title      = element_text(size = 25),
+    axis.text.x     = element_text(angle = 45, hjust = 1, size = 25),
+    strip.text      = element_text(size = 24, face = "bold"),
+    panel.spacing.x = unit(1, "lines"),
+    legend.position = "top",
+    legend.text     = element_text(size = 20),
+    legend.key.size = unit(1, "cm")    
+  )
+
+#  Save barplot as PDF
+pdf("intransit_vs_other_validation.pdf", width = 10, height = 6)
+print(p_profiles)
+dev.off()
+```
+

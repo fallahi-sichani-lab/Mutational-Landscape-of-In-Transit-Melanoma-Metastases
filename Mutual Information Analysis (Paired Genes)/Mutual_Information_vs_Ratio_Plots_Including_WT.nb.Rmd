@@ -1,0 +1,239 @@
+---
+title: "Pairwise mutation analysis and functional enrichment of NRASMUT/WT gene combinations in ITM"
+output: "Figure 4B"
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(cowplot)
+library(scales)    # for alpha()
+library(readr)     # for read_csv
+library(openxlsx)  # for write.xlsx
+```
+
+```{r}
+#  Input files 
+results_dir <- "../Data/"
+csv_files <- c(
+  "20250730_mi_results_intransit_mets.csv",
+  "20250730_mi_results_intransit_primary.csv",
+  "20250730_mi_results_two_class.csv",
+  "20250730_mi_results_intransit_regionalLN.csv"
+)
+file_paths <- file.path(results_dir, csv_files)
+```
+
+```{r}
+########################
+# ---- Figure 4B ---- #
+########################
+
+#  Highlight levels & palette 
+highlight_levels <- c(
+  "Other",
+  "NRAS MUT",
+  "High MI Combos",
+  "Individual MUT",
+  "Individual WT"
+)
+set2_cols <- brewer.pal(4, "Set2")
+fill_vals <- c(
+  "Other"           = "gray55",
+  "NRAS MUT"        = set2_cols[1],
+  "High MI Combos"  = set2_cols[2],
+  "Individual MUT"  = set2_cols[3],
+  "Individual WT"   = set2_cols[4]
+)
+
+#  Helper for titles 
+sanitize_group_name <- function(fname) {
+  nm <- basename(fname)
+  nm <- sub("^[0-9]+_?mi_results_?", "", nm, ignore.case = TRUE)
+  nm <- sub("\\.csv$", "", nm, ignore.case = TRUE)
+  tools::toTitleCase(gsub("_", " ", nm))
+}
+
+legend_saved <- FALSE
+
+for (fp in file_paths) {
+  if (!file.exists(fp)) next
+  
+  # Read raw data
+  df <- read_csv(fp, show_col_types = FALSE)
+  
+  # Extract unique single‐gene MUT rows
+  orig_indiv <- df %>%
+    filter(is.na(Gene2)) %>%
+    distinct(Gene1, .keep_all = TRUE)
+  
+  # Build WT counterparts by flipping all Ratio_* columns
+  ratio_cols <- grep("^Ratio_", names(orig_indiv), value = TRUE)
+  indiv_wt <- orig_indiv %>%
+    mutate(
+      across(all_of(ratio_cols), ~ 1 - .x),
+      Combination = paste0(Gene1, "_WT")
+    )
+  
+  # Combine original + WT
+  pairwise_results <- bind_rows(df, indiv_wt) %>%
+    mutate(Highlight = NA_character_)
+  
+  # NRAS_MUT MI threshold
+  threshold_nras <- pairwise_results %>%
+    filter(Combination == "NRAS_MUT") %>%
+    pull(MI) %>% first() %||% -Inf
+  
+  #  Highlight logic 
+  # 1) NRAS MUT
+  pairwise_results$Highlight[
+    pairwise_results$Combination == "NRAS_MUT"
+  ] <- "NRAS MUT"
+  
+  # 2) High MI Combos: any pairwise (Gene2 not NA) with MI > NRAS and Ratio_intransit ≥ .35
+  pairwise_results$Highlight[
+    !is.na(pairwise_results$Gene2) &
+      pairwise_results$MI > threshold_nras &
+      pairwise_results$Ratio_intransit >= 0.35
+  ] <- "High MI Combos"
+  
+  # 3) Individual MUT
+  pairwise_results$Highlight[
+    is.na(pairwise_results$Gene2) &
+      grepl("_MUT$", pairwise_results$Combination) &
+      pairwise_results$MI > threshold_nras &
+      pairwise_results$Ratio_intransit >= 0.35
+  ] <- "Individual MUT"
+  
+  # 4) Individual WT
+  pairwise_results$Highlight[
+    is.na(pairwise_results$Gene2) &
+      grepl("_WT$", pairwise_results$Combination) &
+      pairwise_results$MI > threshold_nras &
+      pairwise_results$Ratio_intransit >= 0.35
+  ] <- "Individual WT"
+  
+  # 5) Other
+  pairwise_results$Highlight[is.na(pairwise_results$Highlight)] <- "Other"
+  pairwise_results$Highlight <- factor(
+    pairwise_results$Highlight,
+    levels = highlight_levels
+  )
+  
+  # Identify the “other” ratio column name
+  other_ratio_col <- setdiff(ratio_cols, "Ratio_intransit")
+  
+  # Drop any single‐gene MUT or WT where Ratio_intransit <= that other ratio
+  pairwise_results <- pairwise_results %>%
+    filter(
+      !(
+        is.na(Gene2) &
+        grepl("_MUT$", Combination) &
+        (Ratio_intransit <= .data[[other_ratio_col]])
+      ),
+      !(
+        is.na(Gene2) &
+        grepl("_WT$", Combination) &
+        (Ratio_intransit <= .data[[other_ratio_col]])
+      )
+    )
+  
+  #  Save highlighted rows (not "Other") to csv
+  highlights_df <- pairwise_results %>%
+    filter(Highlight != "Other")
+  csv_out <- paste0(
+    "highlights_",
+    tolower(gsub(" ", "_", sanitize_group_name(basename(fp)))),
+    ".csv"
+  )
+  write_csv(highlights_df, file = csv_out)
+  
+  #  Build scatter plot 
+  color_nras <- fill_vals[["NRAS MUT"]]
+  scatter_plot_main <- ggplot() +
+    # NRAS vertical dashed line
+    geom_vline(
+      xintercept = threshold_nras,
+      color    = color_nras,
+      linetype = "dashed",
+      linewidth = 1
+    ) +
+    # Other points
+    geom_point(
+      data = subset(pairwise_results, Highlight == "Other"),
+      aes(x = MI, y = Ratio_intransit * 100, fill = Highlight),
+      shape = 21, color = "black", size = 3
+    ) +
+    # Highlighted points
+    geom_point(
+      data = subset(pairwise_results, Highlight != "Other"),
+      aes(x = MI, y = Ratio_intransit * 100, fill = Highlight),
+      shape = 25, color = "black", size = 5
+    ) +
+    scale_fill_manual(values = fill_vals) +
+    labs(
+      x = "Mutual Information",
+      y = "% of In-Transit Samples",
+      title = "") +
+    theme_classic() +
+    theme(
+      axis.text.x     = element_text(size = 25),
+      axis.text.y     = element_text(size = 25),
+      axis.title      = element_text(size = 35),
+      plot.title      = element_text(size = 24, hjust = 0.5),
+      legend.position = "none"
+    )  + scale_x_continuous(
+    limits = c(0, NA),
+    expand = expansion(add = c(0, 0.005))
+  ) +
+  coord_cartesian(xlim = c(0, max(pairwise_results$MI, na.rm = TRUE) + 0.005)) +
+  theme(
+    plot.margin = margin(t = 5, r = 15, b = 5, l = 5)
+  )
+  
+  #  Save legend once 
+  if (!legend_saved) {
+    scatter_for_legend <- ggplot() +
+      geom_point(
+        data = subset(pairwise_results, Highlight == "Other"),
+        aes(x = MI, y = Ratio_intransit * 100, fill = Highlight),
+        shape = 21, color = "black", size = 3, alpha = 0.3
+      ) +
+      geom_point(
+        data = subset(pairwise_results, Highlight != "Other"),
+        aes(x = MI, y = Ratio_intransit * 100, fill = Highlight),
+        shape = 21, color = "black", size = 6
+      ) +
+      scale_fill_manual(values = fill_vals) +
+      labs(x = NULL, y = NULL) +
+      theme_classic() +
+      theme(
+        legend.title      = element_blank(),
+        legend.text       = element_text(size = 16),
+        legend.background = element_rect(fill = alpha("white", 0.5)),
+        legend.position   = "right"
+      )
+    legend_grob <- suppressWarnings(cowplot::get_legend(scatter_for_legend))
+    ggsave("scatter_MI_vs_ratio_legend.png", legend_grob, width = 4, height = 5)
+    legend_saved <- TRUE
+  }
+  
+  #  Save main figure as PNG 
+  out_png <- paste0(
+    "scatter_",
+    gsub(" ", "_", tolower(sanitize_group_name(basename(fp)))),
+    ".png"
+  )
+  ggsave(out_png, scatter_plot_main, width = 7, height = 7, dpi = 300)
+  
+   #  Also save main figure as PDF 
+  out_pdf <- sub("\\.png$", ".pdf", out_png)
+  pdf(out_pdf, width = 7, height = 7)
+  print(scatter_plot_main)
+  dev.off()
+  
+  #  Display in R session 
+  print(scatter_plot_main)
+}
+```

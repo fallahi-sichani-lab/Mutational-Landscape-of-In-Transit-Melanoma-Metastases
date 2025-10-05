@@ -1,0 +1,174 @@
+---
+title: "Pairwise mutation analysis and functional enrichment of NRASMUT/WT gene combinations in ITM"
+output: "Generating data for Figure 4B,C,D"
+---
+
+```{r}
+library(infotheo)
+library(dplyr)
+library(doParallel)
+library(foreach)
+```
+
+```{r}
+outDir  <- "../Results/"
+inDir  <- "../Data/"
+
+rds_files <- list(
+  two_class             = "mutation_df_two_class.rds",
+  intransit_primary     = "mutation_df_intransit_primary.rds",
+  intransit_regionalLN  = "mutation_df_intransit_regionalLN.rds",
+  intransit_mets        = "mutation_df_intransit_mets.rds"
+)
+```
+
+```{r}
+# Helper functions
+# Logical AND of two mutation columns
+and_genes <- function(df, gene1, gene2) {
+  g1 <- as.numeric(as.character(df[[gene1]]))
+  g2 <- as.numeric(as.character(df[[gene2]]))
+  g1 == 1 & g2 == 1
+}
+
+# Logical AND NOT of two mutation columns
+and_not_genes <- function(df, gene1, gene2) {
+  g1 <- as.numeric(as.character(df[[gene1]]))
+  g2 <- as.numeric(as.character(df[[gene2]]))
+  g1 == 1 & g2 == 0
+}
+
+# Generalized summary of mutation‐rates per class
+calculate_mutations <- function(df, combined, target) {
+  # pick up your two class‐labels in the order of the factor levels
+  lv     <- levels(factor(df[[target]]))
+  class1 <- lv[1]
+  class2 <- lv[2]
+  
+  # mean fraction mutated in each class
+  means  <- tapply(combined, df[[target]], mean)
+  more   <- if (means[class1] > means[class2]) class1 else class2
+  
+  # counts & mutated counts
+  total1 <- sum(df[[target]] == class1)
+  total2 <- sum(df[[target]] == class2)
+  mut1   <- sum(combined[df[[target]] == class1])
+  mut2   <- sum(combined[df[[target]] == class2])
+  
+  # return a named list: More_Mutated + Ratio_<class1> + Ratio_<class2>
+  out <- list(More_Mutated = more)
+  out[[paste0("Ratio_", class1)]] <- mut1 / total1
+  out[[paste0("Ratio_", class2)]] <- mut2 / total2
+  out
+}
+
+# MI + permutation testing for one binary vector
+fit_and_evaluate_mi <- function(df, combined, target, nperm = 1000) {
+  comb_fac <- as.numeric(combined)
+  targ_fac <- factor(df[[target]])
+  
+  obs_mi  <- mutinformation(comb_fac, targ_fac)
+  perm_mi <- replicate(nperm, mutinformation(comb_fac, sample(targ_fac)))
+  p_val   <- mean(perm_mi >= obs_mi)
+  
+  list(MI = obs_mi, P_value = p_val)
+}
+```
+
+```{r}
+# Parallel MI loop over all datasets
+
+ncores <- 40
+cl     <- makeCluster(ncores)
+registerDoParallel(cl)
+
+for (nm in names(rds_files)) {
+  message("▶︎ Running MI on: ", nm)
+  
+  df     <- readRDS(file.path(inDir, rds_files[[nm]]))
+  target <- "class"
+  
+  # pick valid genes
+  valid_genes <- setdiff(names(df), c(target, "group", "numgenes"))
+  valid_genes <- valid_genes[sapply(valid_genes, function(g) {
+    vals <- na.omit(df[[g]])
+    length(unique(vals)) >= 2
+  })]
+  
+  # all gene‐pairs
+  pairs <- combn(valid_genes, 2, simplify = FALSE)
+  
+  # pairwise MI + permutation
+  pairwise_results <- foreach(
+    pair      = pairs,
+    .combine  = rbind,
+    .packages = "infotheo"
+  ) %dopar% {
+    g1 <- pair[1]; g2 <- pair[2]
+    
+    # AND
+    comb_and   <- as.numeric(and_genes(df, g1, g2))
+    res_and    <- fit_and_evaluate_mi(df, comb_and,   target)
+    mut_and    <- calculate_mutations(df, comb_and,   target)
+    
+    # AND NOT
+    comb_and_not <- as.numeric(and_not_genes(df, g1, g2))
+    res_and_not  <- fit_and_evaluate_mi(df, comb_and_not, target)
+    mut_and_not  <- calculate_mutations(df, comb_and_not, target)
+    
+    # build two result rows with dynamic Ratio_<class> columns
+    row1 <- as.data.frame(c(
+      Gene1        = g1,
+      Gene2        = g2,
+      Combination  = paste0(g1, "_AND_",   g2),
+      MI           = res_and$MI,
+      P_value      = res_and$P_value,
+      mut_and
+    ), stringsAsFactors = FALSE)
+    
+    row2 <- as.data.frame(c(
+      Gene1        = g1,
+      Gene2        = g2,
+      Combination  = paste0(g1, "_ANDNOT_", g2),
+      MI           = res_and_not$MI,
+      P_value      = res_and_not$P_value,
+      mut_and_not
+    ), stringsAsFactors = FALSE)
+    
+    rbind(row1, row2)
+  }
+  
+  # single‐gene MI + permutation
+  individual_results <- foreach(
+    g         = valid_genes,
+    .combine  = rbind,
+    .packages = "infotheo"
+  ) %dopar% {
+    comb_ind <- as.numeric(df[[g]] == 1)
+    res_ind  <- fit_and_evaluate_mi(df, comb_ind, target)
+    mut_ind  <- calculate_mutations(df, comb_ind, target)
+    
+    as.data.frame(c(
+      Gene1        = g,
+      Gene2        = NA,
+      Combination  = paste0(g, "_MUT"),
+      MI           = res_ind$MI,
+      P_value      = res_ind$P_value,
+      mut_ind
+    ), stringsAsFactors = FALSE)
+  }
+  
+  # stop cluster just once at end of script
+  final <- bind_rows(pairwise_results, individual_results) %>%
+           arrange(desc(as.numeric(MI)))
+  
+  write.csv(
+    final,
+    file = file.path(outDir, paste0("20250730_mi_results_", nm, ".csv")),
+    row.names = FALSE
+  )
+}
+
+stopCluster(cl)
+message("All datasets processed.")
+```

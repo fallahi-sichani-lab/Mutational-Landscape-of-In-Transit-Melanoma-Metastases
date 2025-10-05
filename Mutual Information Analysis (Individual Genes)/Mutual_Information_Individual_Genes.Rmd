@@ -1,0 +1,229 @@
+---
+title: "Mutual information and PCA reveal mutation patterns distinguishing ITM from other melanoma subtypes"
+output: "Figure 3A"
+---
+
+```{r}
+rm(list=ls())
+cat("\014") 
+```
+
+```{r}
+library(infotheo) # For Mutual Information
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(scales)
+```
+
+```{r}
+inDir <- "../Data/"
+```
+
+```{r}
+data <- readRDS(file = file.path(inDir,"mutation_df.rds"))
+```
+
+```{r}
+# Assign target variable
+df <- data
+target <- "class"
+
+# Define which columns to test
+all_genes <- setdiff(names(df), c(target, "group", "numgenes"))
+
+# Find the valid ones
+valid_genes <- all_genes[sapply(all_genes, function(gene) {
+  vals <- df[[gene]]
+  vals <- vals[!is.na(vals)]
+  length(unique(vals)) >= 2 # Is gene mutated in at least one sample?
+})]
+
+# The remainder are non‑valid
+non_valid_genes <- setdiff(all_genes, valid_genes)
+
+# Print results
+message("Valid genes (≥ 2 unique non‑NA values):\n  ",
+        paste(valid_genes, collapse = ", "))
+if (length(non_valid_genes) > 0) {
+  message("Non‑valid genes (< 2 unique non‑NA values):\n  ",
+          paste(non_valid_genes, collapse = ", "))
+} else {
+  message("All tested genes are valid.")
+}
+
+```
+
+```{r}
+#’ Compute mutual information between a binary (0/1) gene vector and a categorical target,
+#’ with a permutation‑based p‑value by permuting the tumor class.
+#’
+#’ @param df             Data frame containing both gene and target columns
+#’ @param gene           Character name of the binary (0/1) gene column
+#’ @param target         Character name of the categorical target column
+#’ @param n_permutations Number of permutations for null MI distribution (default 1000)
+#’ @return A list with:
+#’   - MI:    observed mutual information  
+#’   - P:     permutation p‑value  
+
+get_mi_pval <- function(df, gene, target, n_permutations = 1000) {
+  # Extract & clean
+  x <- df[[gene]]
+  y <- df[[target]]
+  keep <- !is.na(x) & !is.na(y)
+  x <- x[keep]
+  y <- y[keep]
+  
+  # Discrete formatting: ensure both are factors
+  x <- as.numeric(x)#factor(x, levels = c(0,1))
+  y <- factor(y)             # let R infer the levels of tumor classes
+  
+  # 3) Observed MI
+  obs_mi <- mutinformation(x, y)
+  
+  # Null distribution by permuting y
+  perm_mi <- replicate(n_permutations, {
+    mutinformation(x, sample(y))
+  })
+  
+  # Empirical p‑value 
+  pval <- (sum(perm_mi >= obs_mi)) / (n_permutations)
+  
+  list(MI = obs_mi, P = pval)
+}
+```
+
+```{r}
+# Run MI analysis
+results_list <- lapply(valid_genes, function(gene) {
+  tryCatch({
+    mi_result <- get_mi_pval(df, gene, target)
+    
+    gene_numeric <- as.numeric(as.character(df[[gene]]))
+    ratio_intransit <- mean(gene_numeric[df[[target]] == "intransit"], na.rm = TRUE)
+    ratio_other <- mean(gene_numeric[df[[target]] == "other"], na.rm = TRUE)
+    
+    data.frame(
+      Gene = gene,
+      MI = mi_result$MI,
+      P_value = mi_result$P,
+      NegLog10_P = -log10(mi_result$P),
+      Ratio_intransit = ratio_intransit,
+      Ratio_other = ratio_other
+    )
+  }, error = function(e) {
+    message(paste("Skipping gene", gene, "due to error:", e$message))
+    return(NULL)
+  })
+})
+
+results_list <- Filter(Negate(is.null), results_list)
+mi_df <- do.call(rbind, results_list)
+
+# Save
+#write.csv(mi_df, "2025_MI_Individual_Genes_with_Permutation.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+########################
+# ---- Figure 3A ---- #
+########################
+
+# Set threshold and prepare data
+signif_threshold <- 0.1
+mi_df$NegLog10_P <- -log10(mi_df$P_value)
+mi_df$Significance <- ifelse(mi_df$P_value <= signif_threshold, "Significant", "Not Significant")
+mi_df$ColorGradient <- ifelse(mi_df$Significance == "Significant", mi_df$NegLog10_P, NA)
+mi_df$Label <- ifelse(mi_df$Significance == "Significant", mi_df$Gene, NA)
+
+# Plot 
+p <- ggplot(mi_df, aes(x = MI, y = NegLog10_P)) +
+
+  # Non-significant points (gray fill, dark gray border)
+  geom_point(
+    data = subset(mi_df, Significance == "Not Significant"),
+    aes(shape = Significance),
+    fill = "gray70", color = "gray20", size = 3, stroke = 0.5
+  ) +
+
+  # Significant points (gradient fill, dark gray border)
+  geom_point(
+    data = subset(mi_df, Significance == "Significant"),
+    aes(fill = ColorGradient),
+    shape = 21, color = "gray20", size = 3, stroke = 0.5
+  ) +
+
+  # Labels with ggrepel for significant genes
+  geom_text_repel(
+    data = subset(mi_df, Significance == "Significant"),
+    aes(label = Label),
+    force = 2,
+    max.iter = 10000,
+    max.overlaps = Inf,
+    point.padding = 0.6,
+    box.padding = 0.6,
+    segment.size = 0.5,
+    segment.color = "gray30",
+    segment.curvature = 0.1,
+    segment.ncp = 3,
+    segment.angle = 20,
+    size = 4.5,
+    family = "sans",
+    min.segment.length = 0
+  ) +
+
+  # Gradient legend for significant genes
+  scale_fill_gradient(
+    low = "gold", high = "red",
+    name = expression(-log[10](italic(p)))
+  ) +
+
+  # Legend entry for non-significant points
+  scale_shape_manual(
+    name = "Significance",
+    values = c("Not Significant" = 21),
+    labels = c("Not Significant\n(-log10(p) < 1)")
+  ) +
+
+  # Labels and theming
+  labs(
+    x = "Mutual Information (MI)",
+    y = expression(-log[10](italic(p))),
+    title = ""
+  ) +
+  theme_classic(base_size = 18) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    axis.title = element_text(size = 17),
+    axis.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14),
+    legend.position = "right"
+  )
+
+# Save figure as png
+#ggsave("individual_genes_MI_vs_pvalue_final_plot.png", plot = p, width = 8, height = 6, dpi = 600)
+
+# Start figure as pdf
+pdf("individual_genes_MI_vs_pvalue_final_plot_new.pdf", width = 8, height = 6)
+ print(p)
+dev.off()
+```
+
+```{r}
+# Get names of significant genes
+significant_genes <- mi_df %>%
+  filter(P_value <= 0.1) %>%
+  pull(Gene)
+
+# Subset the original df to include only those genes + the Class column
+df_significant_only <- df %>%
+  select(class, all_of(significant_genes))
+
+# Save as RDS for PCA analysis
+saveRDS(df_significant_only, file = "20250805_dataframe_pca_genes_new.rds")
+```
+
+

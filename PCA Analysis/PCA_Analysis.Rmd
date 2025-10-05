@@ -1,0 +1,337 @@
+---
+title: "Mutual information and PCA reveal mutation patterns distinguishing ITM from other melanoma subtypes"
+output: "Figure 3B,3C,3D,3E,3F"
+---
+
+```{r}
+rm(list=ls()) #clear all
+cat("\014") #clc
+```
+```{r}
+# Define Output directory 
+outDir <- "../Results/"
+# Define Input directory 
+inDir <- "../Data/"
+```
+
+```{r}
+# Load libraries
+library(tidyverse)
+library(cluster)
+library(factoextra)
+library(reshape2)
+library(ggridges)
+library(ggplot2)
+library(cowplot)
+library(RColorBrewer)
+library(dplyr)
+library(tidyr)
+library(scales)
+```
+
+```{r}
+# Read data
+dataframe <- readRDS(file = file.path(inDir,"dataframe_pca_genes.rds"))
+
+
+# Extract components
+data_matrix <- dataframe[, 2:ncol(dataframe)]
+variable_names <- colnames(data_matrix)
+observations_patients <- dataframe[, 1]
+observations_class <- dataframe[, ncol(dataframe)]
+```
+
+```{r}
+# PCA
+pca_res <- prcomp(data_matrix, scale. = FALSE)
+scores <- pca_res$x
+explained <- summary(pca_res)$importance[2, ] * 100
+```
+
+```{r}
+# Plot cumulative variance
+explained <- pca_res$sdev^2 / sum(pca_res$sdev^2) * 100 
+cum_explained <- cumsum(explained)
+
+# Create a data frame for plotting
+plot_df <- data.frame(PC = 1:length(explained), Cumulative = cum_explained)
+
+# Plot
+p <- ggplot(plot_df, aes(x = PC, y = Cumulative)) +
+  geom_line(color = "black", linewidth = 1.2) +
+  geom_point(color = "black", fill = "black", shape = 21, size = 2.5) +
+  scale_x_continuous(breaks = seq(0, length(explained), 5)) +
+  ylim(0, 100) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "",
+    x = "Principal components (PCs)",
+    y = "% Variance explained"
+  ) +
+  theme(
+    plot.title = element_text(size = 16, hjust = 0.5),
+    axis.title = element_text(size = 24),
+    axis.text = element_text(size = 20)
+  )
+
+# Save as high-resolution square figure
+ggsave("cumulative_variance_pca_square.png", plot = p, width = 6, height = 6, dpi = 600)
+
+```
+
+```{r}
+########################
+# ---- Figure 3B ---- #
+########################
+
+# Extract PCA scores and variance explained
+scores <- pca_res$x
+explained <- summary(pca_res)$importance[2, 1:2] * 100  # top 2 PCs
+explained_percent <- round(explained, 1)
+
+# Count number of samples per class
+class_labels_raw <- c("Other", "In-Transit")
+class_counts <- table(factor(observations_class, levels = 0:1))
+class_labels <- paste0(class_labels_raw, " (n=", class_counts, ")")
+
+# Prepare data frame for plotting
+plot_df <- data.frame(
+  scores[, 1:2],
+  class = factor(observations_class, levels = 0:1, labels = class_labels)
+)
+plot_df_long <- melt(plot_df, id.vars = "class")
+
+# Assign PC labels with variance explained for y-axis
+pc_labels <- paste0("PC", 1:2, " (", explained_percent, "%)")
+plot_df_long$variable <- factor(plot_df_long$variable, levels = paste0("PC", 2:1), labels = pc_labels[2:1])
+
+# Define colors (Set2 palette)
+colors_set2 <- RColorBrewer::brewer.pal(8, "Set2")
+fill_colors <- setNames(c("black", colors_set2[1]), class_labels)
+line_colors <- fill_colors  # same as fill but for outlines
+
+# Create ridge plot with outline
+p <- ggplot(plot_df_long, aes(x = value, y = variable, fill = class, color = class)) +
+  geom_density_ridges(
+    alpha = 0.6,
+    scale = 0.9,
+    rel_min_height = 0.01,
+    linewidth = 0.5
+  ) +
+  scale_fill_manual(
+    values = fill_colors,
+    name = "Sample Type"
+  ) +
+  scale_color_manual(
+    values = line_colors,
+    guide = "none"
+  ) +
+  theme_ridges() +
+  theme(
+    text = element_text(size = 18),
+    axis.text.y = element_text(size = 16),
+    axis.text.x = element_text(size = 16),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5)
+  ) +
+  labs(
+    x = "PC Score",
+    y = NULL,
+    title = ""
+  )
+
+# Save the main plot without legend
+p_no_legend <- p + theme(legend.position = "none")
+
+pdf("ridgeplot_pca_no_legend.pdf", width = 4, height = 6)
+print(p_no_legend)
+dev.off()
+
+# Extract the legend from the original plot and save it
+legend_grob <- get_legend(
+  p + theme(
+    legend.position   = "right",
+    legend.background = element_rect(fill = "white", color = NA)
+  )
+)
+legend_plot <- ggdraw(legend_grob)
+
+pdf("ridgeplot_pca_legend_only.pdf", width = 2, height = 2)
+print(legend_plot)
+dev.off()
+
+
+
+```
+
+
+```{r}
+###############################
+# ---- Figure 3C and 3D ---- #
+###############################
+
+# Extract PC1 and PC2 loadings
+loadings <- pca_res$rotation[, 1:2]
+variable_names <- rownames(loadings)
+
+# Define plotting function
+plot_pc_loadings <- function(pc_index, pc_name, output_file) {
+  pc_loadings <- loadings[, pc_index]
+  names(pc_loadings) <- variable_names
+
+  # Order by absolute value of loading
+  ordered_vars <- names(sort(abs(pc_loadings), decreasing = TRUE))
+  ordered_loadings <- pc_loadings[ordered_vars]
+
+  # Plot
+  pdf("output_file", width = 8, height = 6)
+  par(mar = c(10, 5, 4, 2))  # room for x-axis labels
+  barplot(
+    ordered_loadings,
+    las = 2,
+    col = brewer.pal(3, "Set2")[1],
+    ylab = "PCA Loading",
+    cex.names = 1.0,
+    cex.axis = 1.2,
+    cex.lab = 1.4,
+    main = paste0("PC", pc_name, " Loadings")
+  )
+  abline(h = 0, col = "gray40", lty = 2)
+  dev.off()
+}
+
+# Plot PC1 and PC2 loadings separately
+plot_pc_loadings(1, "1", "PC1_loadings.pdf")
+plot_pc_loadings(2, "2", "PC2_loadings.pdf")
+
+```
+
+```{r}
+###############################
+# ---- Figure 3E and 3F ---- #
+###############################
+
+# Add Category column to data
+dataframe <- dataframe %>%
+  mutate(
+    Category = recode(
+      class,
+      intransit = "In-Transit",
+      other     = "Other"
+    )
+  )
+
+# Define genes of interest
+genes_wt  <- c("NF1", "ROS1")
+genes_mut <- c("NRAS")
+genes     <- c(genes_wt, genes_mut)
+
+# Create plot-friendly axis labels: gene^WT and gene^MUT
+gene_labels_wt  <- setNames(
+  lapply(genes_wt, function(g) bquote(.(g)^WT)),
+  genes_wt
+)
+gene_labels_mut <- setNames(
+  lapply(genes_mut, function(g) bquote(.(g)^MUT)),
+  genes_mut
+)
+
+# Pivot to long form
+df_long <- dataframe %>%
+  select(Category, all_of(genes)) %>%
+  pivot_longer(all_of(genes), names_to = "Gene", values_to = "Mutation") %>%
+  mutate(
+    Gene     = factor(Gene, levels = genes),
+    Mutation = factor(Mutation, levels = c(0,1), labels = c("WT","MUT"))
+  )
+
+# Custom fill colors
+custom_colors <- c(
+  "In-Transit" = brewer.pal(8, "Set2")[1],
+  "Other"       = "#333333"
+)
+
+# ---------------------- WT Plot -------------------------
+# Compute percentages for WT
+plot_df_wt <- df_long %>%
+  filter(Gene %in% genes_wt) %>%
+  group_by(Category, Gene) %>%
+  summarise(
+    Total    = n(),
+    WT_Count = sum(Mutation == "WT"),
+    .groups  = "drop"
+  ) %>%
+  mutate(Percent = 100 * WT_Count / Total)
+
+# Ensure factor ordering
+plot_df_wt$Gene <- factor(plot_df_wt$Gene, levels = genes_wt)
+
+# Build the WT bar plot
+p_wt <- ggplot(plot_df_wt, aes(x = Gene, y = Percent, fill = Category)) +
+  geom_col(position = position_dodge(width = 0.9), width = 0.8, color = "white") +
+  geom_text(
+    aes(label = paste0(round(Percent, 1), "%"), y = Percent + 3),
+    position = position_dodge(width = 0.9),
+    vjust = 0, size = 4.5, color = "black"
+  ) +
+  scale_fill_manual(values = custom_colors) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    expand = c(0, 0)
+  ) +
+  labs(
+    x = NULL,
+    y = "% within sample type"
+  ) +
+  theme_classic(base_size = 20) +
+  theme(legend.position = "none")
+
+# Save WT plot as PDF without legend and no padding
+pdf("wt_genes_percent_samples_per_tumor_type.pdf", width = 4, height = 5)
+print(p_wt)
+dev.off()
+
+
+# ---------------------- MUT Plot -------------------------
+# Compute percentages for MUT
+plot_df_mut <- df_long %>%
+  filter(Gene %in% genes_mut) %>%
+  group_by(Category, Gene) %>%
+  summarise(
+    Total     = n(),
+    MUT_Count = sum(Mutation == "MUT"),
+    .groups   = "drop"
+  ) %>%
+  mutate(Percent = 100 * MUT_Count / Total)
+
+# Ensure factor ordering
+plot_df_mut$Gene <- factor(plot_df_mut$Gene, levels = genes_mut)
+
+# Build the MUT bar plot
+p_mut <- ggplot(plot_df_mut, aes(x = Gene, y = Percent, fill = Category)) +
+  geom_col(position = position_dodge(width = 0.9), width = 0.8, color = "white") +
+  geom_text(
+    aes(label = paste0(round(Percent, 1), "%"), y = Percent + 3),
+    position = position_dodge(width = 0.9),
+    vjust = 0, size = 4.5, color = "black"
+  ) +
+  scale_fill_manual(values = custom_colors) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    expand = c(0, 0)
+  ) +
+  labs(
+    x = NULL,
+    y = "% within sample type"
+  ) +
+  theme_classic(base_size = 20) +
+  theme(legend.position = "none")
+
+# Save MUT plot as PDF without legend and no padding
+pdf("mut_genes_percent_samples_per_tumor_type.pdf", width = 3, height = 5)
+print(p_mut)
+dev.off()
+
+
+```

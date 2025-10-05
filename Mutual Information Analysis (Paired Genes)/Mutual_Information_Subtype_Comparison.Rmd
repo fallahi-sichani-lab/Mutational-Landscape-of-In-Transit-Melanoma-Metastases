@@ -1,0 +1,66 @@
+---
+title: "Pairwise mutation analysis and functional enrichment of NRASMUT/WT gene combinations in ITM"
+output: "Figure 4C"
+---
+
+```{r}
+rm(list=ls()) #clear all
+cat("\014") #clc
+```
+
+```{r}
+library(readr)
+library(stringr)
+library(UpSetR)
+```
+
+```{r}
+inDir  <- "../Data/"
+
+# Grab the highlight files
+all_highlights <- list.files(
+  path = inDir,
+  pattern = "^highlights_.*\\.csv$",
+  full.names = TRUE
+) 
+
+files_use <- all_highlights[!grepl("mets", all_highlights, ignore.case = TRUE)]
+```
+
+```{r}
+########################
+# ---- Figure 4C ---- #
+########################
+
+# Helper function to build a named list of sets
+make_set_list <- function(pattern, names_from) {
+  lst <- lapply(files_use, function(f) {
+    df <- read_csv(f, show_col_types = FALSE)
+    # keep only combos matching the pattern:
+    combos <- df$Combination[str_detect(df$Combination, pattern)]
+    # extract the gene part after the underscore:
+    genes <- sub(pattern, "\\1", combos)
+    unique(genes)
+  })
+  # name by the comparison (strip “highlights_” & “.csv”)
+  names(lst) <- tools::file_path_sans_ext(basename(files_use)) %>%
+    sub("^highlights_", "", .)
+  lst
+}
+
+# NRAS_ANDNOT_Gene2
+nras_sets <- make_set_list("^NRAS_ANDNOT_(.+)$", names_from = "Gene2")
+nras_matrix <- fromList(nras_sets)
+p <- upset(
+  nras_matrix,
+  nsets       = length(nras_sets),
+  nintersects = NA,
+  order.by    = "freq",
+  mainbar.y.label = "Intersection size (MUT/WT)",
+  sets.x.label    = "NRAS_ANDNOT per comparison",
+  text.scale = c(2,2,2,2,2,2)
+)
+pdf("upset_NRASMUT_AND_WT.pdf", width = 10, height = 6)
+print(p)
+dev.off()
+```
